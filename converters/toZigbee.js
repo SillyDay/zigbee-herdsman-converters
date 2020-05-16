@@ -1320,15 +1320,6 @@ const converters = {
                 meta.message.transition = meta.message.transition * 3.3;
             }
 
-            if (meta.mapped.model === 'GL-C-007' && utils.hasEndpoints(meta.device, [11, 13, 15])) {
-                // GL-C-007 RGBW
-                if (key === 'state' && value.toUpperCase() === 'OFF' && !meta.options.separate_control) {
-                    await converters.light_onoff_brightness.convertSet(meta.device.getEndpoint(15), key, value, meta);
-                }
-
-                entity = meta.state.white_value === -1 ? meta.device.getEndpoint(11) : meta.device.getEndpoint(15);
-            }
-
             if (meta.mapped.model === 'GL-C-007/GL-C-008' && utils.hasEndpoints(meta.device, [10, 11, 13])) {
                 // GL-C-007/GL-C-008 RGBW
                 if (key === 'state' && value.toUpperCase() === 'OFF') {
@@ -1361,54 +1352,15 @@ const converters = {
                 meta.message.transition = meta.message.transition * 3.3;
             }
 
-            if (key === 'color' && !meta.message.transition) {
+            if (meta.mapped.model === 'GL-C-007-1ID' && key === 'color' && !meta.message.transition) {
                 // Always provide a transition when setting color, otherwise CCT to RGB
                 // doesn't work properly (CCT leds stay on).
                 meta.message.transition = 0.4;
             }
 
-            const state = {};
-
-            if (meta.mapped.model === 'GL-C-007') {
-                // GL-C-007 RGBW
-                if (utils.hasEndpoints(meta.device, [11, 13, 15])) {
-                    if (key === 'white_value') {
-                        // Switch from RGB to white
-                        if (!meta.options.separate_control) {
-                            await meta.device.getEndpoint(15).command('genOnOff', 'on', {});
-                            await meta.device.getEndpoint(11).command('genOnOff', 'off', {});
-                            state.color = xyWhite;
-                        }
-
-                        const result = await converters.light_brightness.convertSet(
-                            meta.device.getEndpoint(15), key, value, meta,
-                        );
-                        return {
-                            state: {white_value: value, ...result.state, ...state},
-                            readAfterWriteTime: 0,
-                        };
-                    } else {
-                        if (meta.state.white_value !== -1 && !meta.options.separate_control) {
-                            // Switch from white to RGB
-                            await meta.device.getEndpoint(11).command('genOnOff', 'on', {});
-                            await meta.device.getEndpoint(15).command('genOnOff', 'off', {});
-                            state.white_value = -1;
-                        }
-                    }
-                } else if (utils.hasEndpoints(meta.device, [11, 13])) {
-                    if (key === 'white_value') {
-                        // Switch to white channel
-                        const payload = {colortemp: 500, transtime: getTransition(entity, key, meta).time};
-                        await entity.command('lightingColorCtrl', 'moveToColorTemp', payload, getOptions(meta.mapped));
-
-                        const result = await converters.light_brightness.convertSet(entity, key, value, meta);
-                        return {
-                            state: {white_value: value, ...result.state, color: xyWhite},
-                            readAfterWriteTime: 0,
-                        };
-                    }
-                }
-            }
+            // Gledopto devices turn ON when they are OFF and color is set.
+            // https://github.com/Koenkk/zigbee2mqtt/issues/3509
+            const state = {state: 'ON'};
 
             // GL-C-007/GL-C-008 RGBW
             if (meta.mapped.model === 'GL-C-007/GL-C-008' && utils.hasEndpoints(meta.device, [10, 11, 13])) {
@@ -2234,6 +2186,28 @@ const converters = {
                     sendTuyaCommand(entity, 1029, 0, [1, 0]); // 0x04 0x05: Set motor direction to forward (default)
                 }
             }
+        },
+    },
+    diyruz_freepad_on_off_config: {
+        key: ['switch_type', 'switch_actions'],
+        convertSet: async (entity, key, value, meta) => {
+            const switchTypesLookup = {
+                toggle: 0x00,
+                momentary: 0x01,
+                multifunction: 0x02,
+            };
+            const switchActionsLookup = {
+                on: 0x00,
+                off: 0x01,
+                toggle: 0x02,
+            };
+
+            const payloads = {
+                switch_type: {'switchType': switchTypesLookup[value] || value},
+                switch_actions: {'switchActions': switchActionsLookup[value] || value},
+            };
+
+            await entity.write('genOnOffSwitchCfg', payloads[key]);
         },
     },
 };

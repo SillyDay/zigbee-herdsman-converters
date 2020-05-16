@@ -360,7 +360,10 @@ const converters = {
             }
 
             if (msg.data.hasOwnProperty('batteryAlarmState')) {
-                payload['battery_low'] = msg.data.batteryAlarmState;
+                const battery1Low = (msg.data.batteryAlarmState & 1<<0) > 0;
+                const battery2Low = (msg.data.batteryAlarmState & 1<<9) > 0;
+                const battery3Low = (msg.data.batteryAlarmState & 1<<19) > 0;
+                payload['battery_low'] = battery1Low || battery2Low || battery3Low;
             }
 
             if (Object.keys(payload).length !== 0) {
@@ -507,6 +510,10 @@ const converters = {
         },
     },
     metering_power: {
+        /**
+         * When using this converter also add the following to the configure method of the device:
+         * await readMeteringPowerConverterAttributes(endpoint);
+         */
         cluster: 'seMetering',
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg, publish, options, meta) => {
@@ -1096,9 +1103,11 @@ const converters = {
         convert: (model, msg, publish, options, meta) => {
             if (msg.data['65281']) {
                 // DEPRECATED: only return lux here (change illuminance_lux -> illuminance)
-                let illuminance = msg.data['65281']['11'];
-                illuminance = calibrateAndPrecisionRoundOptions(illuminance, options, 'illuminance');
-                return {illuminance, illuminance_lux: illuminance};
+                const illuminance = msg.data['65281']['11'];
+                return {
+                    illuminance: calibrateAndPrecisionRoundOptions(illuminance, options, 'illuminance'),
+                    illuminance_lux: calibrateAndPrecisionRoundOptions(illuminance, options, 'illuminance_lux'),
+                };
             }
         },
     },
@@ -1107,9 +1116,11 @@ const converters = {
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg, publish, options, meta) => {
             // DEPRECATED: only return lux here (change illuminance_lux -> illuminance)
-            let illuminance = msg.data['measuredValue'];
-            illuminance = calibrateAndPrecisionRoundOptions(illuminance, options, 'illuminance');
-            return {illuminance, illuminance_lux: illuminance};
+            const illuminance = msg.data['measuredValue'];
+            return {
+                illuminance: calibrateAndPrecisionRoundOptions(illuminance, options, 'illuminance'),
+                illuminance_lux: calibrateAndPrecisionRoundOptions(illuminance, options, 'illuminance_lux'),
+            };
         },
     },
     WSDCGQ01LM_WSDCGQ11LM_interval: {
@@ -1458,6 +1469,12 @@ const converters = {
         cluster: 'genMultistateInput',
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg, publish, options, meta) => {
+            // Somestime WXKG02LM sends multiple messages on a single click, this prevents handling
+            // of a message with the same transaction sequence number twice.
+            const current = msg.meta.zclTransactionSequenceNumber;
+            if (store[msg.device.ieeeAddr] === current) return;
+            store[msg.device.ieeeAddr] = current;
+
             const button = getKey(model.endpoint(msg.device), msg.endpoint.ID);
             const value = msg.data['presentValue'];
 
@@ -1758,6 +1775,13 @@ const converters = {
                     },
                 };
             }
+        },
+    },
+    curtain_position_analog_output: {
+        cluster: 'genAnalogOutput',
+        type: ['attributeReport', 'readResponse'],
+        convert: (model, msg, publish, options, meta) => {
+            return {position: precisionRound(msg.data['presentValue'], 2)};
         },
     },
     ZNCLDJ11LM_ZNCLDJ12LM_curtain_analog_output: {
@@ -2385,6 +2409,20 @@ const converters = {
                 contact: !(zoneStatus & 1), // Bit 1 = Contact
                 // Bit 5 = Currently always set?
             };
+        },
+    },
+    SE21_action: {
+        cluster: 'ssIasZone',
+        type: 'commandStatusChangeNotification',
+        convert: (model, msg, publish, options, meta) => {
+            const buttonStates = {
+                0: 'off',
+                1: 'single',
+                2: 'double',
+                3: 'hold',
+            };
+
+            return {action: buttonStates[msg.data.zonestatus]};
         },
     },
     st_button_state: {
@@ -3894,6 +3932,24 @@ const converters = {
                 current: precisionRound(power/230, 2),
                 action: msg.data['41367'] === 1 ? 'hold' : 'release',
             };
+        },
+    },
+    diyruz_freepad_clicks: {
+        cluster: 'genMultistateInput',
+        type: ['readResponse', 'attributeReport'],
+        convert: (model, msg, publish, options, meta) => {
+            const button = getKey(model.endpoint(msg.device), msg.endpoint.ID);
+            const lookup = {
+                0: 'hold',
+                1: 'single',
+                2: 'double',
+                3: 'triple',
+                4: 'quadruple',
+                255: 'release',
+            };
+            const clicks = msg.data['presentValue'];
+            const action = lookup[clicks] ? lookup[clicks] : `many_${clicks}`;
+            return {action: `${button}_${action}`};
         },
     },
     aqara_opple_report: {
